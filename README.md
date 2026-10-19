@@ -102,7 +102,7 @@ The deploy job needs `contents: write` (and `pull-requests: write` for comments)
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/Nishchalpr4/alembic-head-fixer
-    rev: v0.1.0
+    rev: v1.0.0
     hooks:
       - id: alembic-head-fixer
 ```
