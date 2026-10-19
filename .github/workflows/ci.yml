@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - { os: windows-latest, python: "3.10" }
+          - { os: windows-latest, python: "3.14" }
+          - { os: macos-latest, python: "3.10" }
+          - { os: macos-latest, python: "3.14" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[test]"
+      - run: python -m pytest -q
+      - run: alembic-head-fixer --version
+
+  action:
+    name: action (end to end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a repo where two green PRs forked the history
+        run: |
+          d="$RUNNER_TEMP/demo"; mkdir -p "$d/alembic/versions"; cd "$d"
+          git init -q -b main
+          git config user.email ci@example.com
+          git config user.name ci
+          printf '[alembic]\nscript_location = %%(here)s/alembic\n' > alembic.ini
+          mk() { printf '"""%s\n\nRevision ID: %s\nRevises: %s\n"""\nrevision = "%s"\ndown_revision = %s\n' "$3" "$1" "$2" "$1" "$4" > "alembic/versions/$1_$3.py"; }
+          mk 041 "" users None; git add -A; git commit -qm 041; git tag alembic-applied
+          git checkout -qb invoices; mk 042 041 add_invoices '"041"'; git add -A; git commit -qm invoices
+          git checkout -q main; git checkout -qb coupons; mk 042 041 add_coupons '"041"'; git add -A; git commit -qm coupons
+          git checkout -q main
+          git merge -q --no-ff invoices -m "Merge invoices"
+          git merge -q --no-ff coupons -m "Merge coupons"
+
+      - id: fix
+        uses: ./
+        with:
+          command: fix
+          working-directory: ${{ runner.temp }}/demo
+          push: "false"
+          comment: "false"
+
+      - name: The later merge was re-chained and committed
+        working-directory: ${{ runner.temp }}/demo
+        env:
+          CHANGED: ${{ steps.fix.outputs.changed }}
+        run: |
+          test "$CHANGED" = "true"
+          test ! -e alembic/versions/042_add_coupons.py
+          grep -q 'down_revision = "042"' alembic/versions/043_add_coupons.py
+          git log -1 --format=%s | grep -q "re-chain diverged migrations"
+
+      - uses: ./
+        with:
+          command: check
+          working-directory: ${{ runner.temp }}/demo

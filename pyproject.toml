@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alembic-head-fixer"
+dynamic = ["version"]
+description = "Catch parallel Alembic migrations before they break `alembic upgrade head`, and safely re-chain them onto a single head."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Nishchal PR" }]
+keywords = ["alembic", "sqlalchemy", "migrations", "database", "ci", "github-actions", "multiple-heads"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+dev = ["pytest>=7", "ruff"]
+
+[project.scripts]
+alembic-head-fixer = "alembic_head_fixer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Nishchalpr4/alembic-head-fixer"
+Changelog = "https://github.com/Nishchalpr4/alembic-head-fixer/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Nishchalpr4/alembic-head-fixer/issues"
+
+[tool.hatch.version]
+path = "src/alembic_head_fixer/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alembic_head_fixer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

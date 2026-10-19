@@ -1,0 +1,160 @@
+name: Alembic Head Fixer
+description: Catch parallel Alembic migrations before they break `alembic upgrade head`, and safely re-chain them onto a single head.
+author: Nishchalpr4
+branding:
+  icon: git-merge
+  color: green
+
+inputs:
+  command:
+    description: "`check` (for PRs), `fix` (in the deploy, before migrating) or `mark-applied` (in the deploy, after migrating)."
+    required: true
+  applied-tag:
+    description: Tag that records the last commit whose migrations ran on the database. `fix` never moves anything in it; `mark-applied` moves it.
+    default: alembic-applied
+  base-ref:
+    description: "`check` only: the branch the PR merges into, e.g. origin/main. New migrations must grow from its current head."
+    default: ""
+  config:
+    description: Path to alembic.ini (relative to working-directory).
+    default: ""
+  versions-dir:
+    description: Path to the revision files, if alembic.ini cannot tell us.
+    default: ""
+  working-directory:
+    description: Where to run, e.g. a service folder in a monorepo.
+    default: "."
+  push:
+    description: "`fix` only: commit and push the re-chained files back to the branch."
+    default: "true"
+  comment:
+    description: "`fix` only: comment on, and label, the PRs whose migrations were moved."
+    default: "true"
+  github-token:
+    description: Token used to push and comment. Needs contents:write (and pull-requests:write for comments).
+    default: ${{ github.token }}
+  python-version:
+    description: Python used to run the tool. Your project's Python is not touched.
+    default: "3.12"
+
+outputs:
+  changed:
+    description: "`true` when `fix` moved something."
+    value: ${{ steps.fix.outputs.changed }}
+  sha:
+    description: The commit to build and migrate from (the fix commit, when there is one).
+    value: ${{ steps.fix.outputs.sha }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install alembic-head-fixer
+      shell: bash
+      run: python -m pip install --quiet --disable-pip-version-check "$ACTION_PATH"
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+
+    - name: Check migration history
+      if: inputs.command == 'check'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        CONFIG: ${{ inputs.config }}
+        VERSIONS_DIR: ${{ inputs.versions-dir }}
+      run: |
+        args=(check)
+        [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
+        [ -n "$VERSIONS_DIR" ] && args+=(--versions-dir "$VERSIONS_DIR")
+        if [ -n "$BASE_REF" ]; then
+          git fetch --quiet origin "${BASE_REF#origin/}"
+          args+=(--base-ref "$BASE_REF")
+        fi
+        alembic-head-fixer "${args[@]}"
+
+    - name: Fix diverged heads
+      id: fix
+      if: inputs.command == 'fix'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TAG: ${{ inputs.applied-tag }}
+        CONFIG: ${{ inputs.config }}
+        VERSIONS_DIR: ${{ inputs.versions-dir }}
+        PUSH: ${{ inputs.push }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ runner.temp }}/alembic-head-fixer.json
+        LOG: ${{ runner.temp }}/alembic-head-fixer.log
+      run: |
+        set -o pipefail
+        args=()
+        [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
+        [ -n "$VERSIONS_DIR" ] && args+=(--versions-dir "$VERSIONS_DIR")
+
+        git fetch --quiet --force origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+        if ! git rev-parse --quiet --verify "refs/tags/$TAG" >/dev/null; then
+          echo "::warning::Tag '$TAG' does not exist yet, so nothing can be moved safely. Checking only; the first successful 'mark-applied' creates it."
+          alembic-head-fixer check "${args[@]}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        rm -f "$REPORT"
+        alembic-head-fixer fix --applied-ref "refs/tags/$TAG" --report "$REPORT" "${args[@]}" | tee "$LOG"
+
+        if [ -s "$REPORT" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+          repo_root=$(git rev-parse --show-toplevel)
+          jq -r '.[] | .file, .new_file' "$REPORT" | sort -u | (cd "$repo_root" && xargs git add -A --)
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "chore(alembic): re-chain diverged migrations" -m "$(cat "$LOG")"
+          if [ "$PUSH" = "true" ]; then
+            # Fails if the branch moved during this run; the run for that newer push redoes the fix.
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+        else
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Tell the PRs whose migrations moved
+      if: inputs.command == 'fix' && inputs.comment == 'true' && steps.fix.outputs.changed == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ steps.fix.outputs.report }}
+        FIX_SHA: ${{ steps.fix.outputs.sha }}
+        LABEL: migration-rechained
+      run: |
+        # Best effort: telling people must never fail the deploy.
+        gh label create "$LABEL" --color d93f0b --description "Migration re-chained after merge by alembic-head-fixer" >/dev/null 2>&1 || true
+        for commit in $(jq -r '[.[].commit | select(. != null)] | unique | .[]' "$REPORT"); do
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit/pulls" --jq '.[0].number // empty' 2>/dev/null || true)
+          [ -n "$pr" ] || continue
+          changes=$(jq -r --arg c "$commit" '.[] | select(.commit == $c) |
+            "- `\(.file)` → `\(.new_file)` (revision `\(.revision)` → `\(.new_revision)`, down_revision `\(.down_revision | join(", "))` → `\(.new_down_revision | join(", "))`)"' "$REPORT")
+          body="**alembic-head-fixer** re-chained this PR's migration so \`$GITHUB_REF_NAME\` keeps a single head. Another migration merged on the same parent first; nothing that already ran on the database was touched.
+
+        $changes
+
+        Fixed in $FIX_SHA. If your local database ran the old revision id, see [the FAQ](https://github.com/Nishchalpr4/alembic-head-fixer#my-local-database-ran-the-old-revision-id). If you cherry-pick this PR elsewhere, take $FIX_SHA with it."
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "$body" || echo "::warning::could not comment on #$pr"
+          gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --add-label "$LABEL" >/dev/null 2>&1 || true
+        done
+
+    - name: Record migrated commit
+      if: inputs.command == 'mark-applied'
+      shell: bash
+      env:
+        TAG: ${{ inputs.applied-tag }}
+      run: |
+        # Run this only after `alembic upgrade head` succeeded: from now on, fix never moves these files.
+        git tag --force "$TAG" HEAD
+        git push --force origin "refs/tags/$TAG"
+        echo "Tagged $(git rev-parse --short HEAD) as $TAG."

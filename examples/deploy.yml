@@ -1,0 +1,41 @@
+# .github/workflows/deploy.yml
+# Two PRs that each passed `check` can still both merge on the same parent.
+# This repairs that on the branch, before anything touches the database.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time: the applied tag must describe what the database really ran.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # push the fix commit and move the applied tag
+  pull-requests: write  # comment on PRs whose migration was moved
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # merge order comes from history
+
+      - id: heads
+        uses: Nishchalpr4/alembic-head-fixer@v1
+        with:
+          command: fix
+
+      # Build from steps.heads.outputs.sha so the image carries the fixed files.
+
+      - name: Migrate
+        run: alembic upgrade head  # or however your deploy runs migrations
+
+      - uses: Nishchalpr4/alembic-head-fixer@v1
+        with:
+          command: mark-applied
+
+      # ... roll out the app

@@ -1,0 +1,41 @@
+name: Bug report
+description: Something went wrong, or a history wasn't handled the way you expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A reproducible history is the most useful thing you can send.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: The command you ran, the full output, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: history
+    attributes:
+      label: The migration history
+      description: |
+        `git log --first-parent --oneline -- <versions dir>` around the problem, and the `revision` / `down_revision` of the files involved.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `alembic-head-fixer --version`, or the Action ref you use (e.g. `@v1`).
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you run it?
+      options:
+        - GitHub Action
+        - CLI
+        - pre-commit
+    validations:
+      required: true

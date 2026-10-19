@@ -1,0 +1,8 @@
+- id: alembic-head-fixer
+  name: alembic-head-fixer check
+  description: Fail if the Alembic migration history is not a single deployable head.
+  entry: alembic-head-fixer check
+  language: python
+  pass_filenames: false
+  files: (^|/)(versions/[^/]+\.py|alembic\.ini)$
+  minimum_pre_commit_version: "2.9.2"

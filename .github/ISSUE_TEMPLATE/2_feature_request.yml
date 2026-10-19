@@ -1,0 +1,22 @@
+name: Feature request
+description: A history shape, CI system or workflow it should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not just the solution. Example histories help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This doesn't require `fix` to change a migration that has already run on the database.
+          required: false

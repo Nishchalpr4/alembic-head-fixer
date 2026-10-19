@@ -1,0 +1,19 @@
+# .github/workflows/migrations.yml
+# Fails a PR whose migrations would fork the history or start from a stale head.
+name: Migrations
+
+on:
+  pull_request:
+    paths: ["alembic/**", "alembic.ini"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: Nishchalpr4/alembic-head-fixer@v1
+        with:
+          command: check
+          base-ref: origin/${{ github.base_ref }}
